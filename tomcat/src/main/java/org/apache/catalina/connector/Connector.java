@@ -6,6 +6,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.coyote.http.Http11Processor;
 
@@ -29,10 +30,10 @@ public class Connector implements Runnable, AutoCloseable {
             final int port,
             final int acceptCount,
             final int maxThreads,
-            final int threadPoolSize
+            final int taskQueueCapacity
     ) {
         this.serverSocket = createServerSocket(port, acceptCount);
-        this.threadPool = ThreadPoolFactories.ioBoundFixed(maxThreads, threadPoolSize);
+        this.threadPool = ThreadPoolFactories.ioBoundFixed(maxThreads, taskQueueCapacity);
         this.stopped = false;
     }
 
@@ -75,10 +76,16 @@ public class Connector implements Runnable, AutoCloseable {
             return;
         }
 
-        threadPool.execute(() -> {
-            final var processor = new Http11Processor(connection);
-            processor.run();
-        });
+        try {
+            threadPool.execute(() -> {
+                final var processor = new Http11Processor(connection);
+                processor.run();
+            });
+        } catch (final RejectedExecutionException e) {
+            log.error("요청을 처리할 수 없습니다. (스레드 풀과 작업 대기열이 가득 찼습니다)", e);
+        } catch (final Exception e) {
+            log.error("요청 처리 중 알 수 없는 오류가 발생했습니다.", e);
+        }
     }
 
     public void stop() {
